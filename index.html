@@ -48,7 +48,23 @@
   pre { white-space: pre-wrap; word-break: break-all; font-size: .75rem; max-height: 300px; overflow: auto; }
   textarea { width: 100%; min-height: 120px; font: .75rem monospace; color: var(--text); background: var(--bg);
              border: 1px solid var(--linie); border-radius: 8px; }
-  .versteckt { display: none; }
+  .versteckt { display: none !important; }
+  #blattAnsicht { position: fixed; inset: 0; background: var(--bg); z-index: 10; display: flex; flex-direction: column; }
+  .blattLeiste { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px;
+                 border-bottom: 1px solid var(--linie); background: var(--karte); }
+  .blattHinweis { font-size: .8rem; color: var(--leise); }
+  #blattRahmen { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; padding: 12px; }
+  #blattFrame { width: 794px; height: 1123px; border: 0; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.25);
+                transform-origin: 0 0; display: block; }
+  .klein { padding: 4px 10px; min-height: 0; font-size: .8rem; }
+  @media print {  /* falls der Browser die ganze Seite statt des Rahmens druckt: nur das Blatt */
+    @page { size: A4; margin: 8mm 10mm 6mm 10mm; }
+    body { background: #fff; }
+    body > main, .blattLeiste { display: none !important; }
+    #blattAnsicht { position: static; display: block; background: #fff; }
+    #blattRahmen { padding: 0; overflow: visible; }
+    #blattFrame { transform: none !important; margin: 0 !important; box-shadow: none; width: 190mm; height: 282mm; }
+  }
 </style>
 </head>
 <body>
@@ -105,7 +121,8 @@
     <h2 style="margin-top:16px">Körperteile</h2>
     <div class="tabelle"><table id="koerperteile"></table></div>
     <div class="knoepfe">
-      <button id="csvMessung" class="haupt">CSV dieser Messung</button>
+      <button id="blattMessung" class="haupt">Gesundheitsblatt (PDF)</button>
+      <button id="csvMessung">CSV dieser Messung</button>
       <button id="csvKopieren">CSV kopieren</button>
     </div>
   </section>
@@ -127,6 +144,16 @@
     </details>
   </section>
 </main>
+
+<div id="blattAnsicht" class="versteckt">
+  <div class="blattLeiste">
+    <button id="blattDrucken" class="haupt">Drucken / als PDF sichern</button>
+    <button id="blattTeilen">Als Datei teilen</button>
+    <button id="blattSchliessen">Schließen</button>
+    <span class="blattHinweis">iPad: Drucken → oben Teilen-Symbol → „In Dateien sichern“</span>
+  </div>
+  <div id="blattRahmen"><iframe id="blattFrame" title="Gesundheitsblatt"></iframe></div>
+</div>
 
 <script>
 // <protokoll> — Bluetooth-Protokoll der MC-580, wie tanita_ble.py (README Abschnitt 0b)
@@ -356,6 +383,569 @@ const Tanita = (() => {
 })();
 // </protokoll>
 
+// <blatt> — Gesundheitsblatt (A4) wie tanita_blatt.py und tanita_auswertung.py, erzeugt dasselbe HTML
+const Blatt = (() => {
+  // Gesunde Körperfettbereiche nach Gallagher et al. 2000 (AJCN 72:694): [bis Alter, Männer, Frauen]
+  const FETT_BEREICH = [[39, [8, 20], [21, 33]], [59, [11, 22], [23, 34]], [120, [13, 25], [24, 36]]];
+  // Phasenwinkel 50 kHz nach Bosy-Westphal et al. 2006: [Mitte der Altersklasse, Männer, Frauen]
+  const PHA_REFERENZ = [[18, 7.1, 6.1], [25, 7.0, 6.1], [35, 6.9, 6.2], [45, 6.7, 6.1], [55, 6.4, 5.9], [65, 6.0, 5.6], [75, 5.4, 5.3]];
+  const C = {
+    akzent: "#0f5e7a", akzent_hell: "#e6f1f5", text: "#1d2b33", grau: "#6b7a83",
+    linie: "#d5dde2", normal: "#cfe6d8", balken: "#1d2b33", rechts: "#0f5e7a", links: "#d9822b",
+    gut: "#2e8b57", warn: "#d9822b", hoch: "#c0392b",
+  };
+
+  // ---------------------------------------------------------------- Zahlen wie in Python
+  /** f"{v:.{n}f}": wie toFixed, nur bei exakt darstellbarem ,5 zur geraden Ziffer */
+  function fx(v, n) {
+    const genau = v.toFixed(n + 40), rest = genau.slice(-40);
+    if (rest === "5".padEnd(40, "0")) {
+      const ab = genau.slice(0, -40).replace(/\.$/, "");
+      if (Number(ab[ab.length - 1]) % 2 === 0) return ab;
+    }
+    return v.toFixed(n);
+  }
+  /** round(v, n) */
+  const rund = (v, n = 0) => n >= 0 ? Number(fx(v, n)) : Number(fx(v / 10 ** -n, 0)) * 10 ** -n;
+  const fehlt = x => x === null || x === undefined;
+  const int = x => Math.trunc(x);
+  const z = (x, stellen = 1, einheit = "") => fehlt(x) ? "–" : fx(x, stellen).replace(".", ",") + einheit;
+  const f1 = v => fx(v, 1);
+  const e = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  const zahlText = s => {
+    if (fehlt(s)) return null;
+    const t = String(s).replace(",", ".").trim();
+    return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t) ? Number(t) : null;
+  };
+  const zahl = (m, k) => zahlText(m.roh[k]);
+  const seg = (m, k) => m.seg[k] || {};
+
+  function ticks(minimum, maximum, schritt) {
+    const erster = Math.ceil(minimum / schritt) * schritt, liste = [];
+    for (let i = 0; i < int((maximum - erster) / schritt) + 1; i++) liste.push(rund(erster + i * schritt, 1));
+    return liste;
+  }
+
+  function fettbereich(alter, maennlich) {
+    for (const [bis, mann, frau] of FETT_BEREICH) if (alter <= bis) return maennlich ? mann : frau;
+    return FETT_BEREICH[2][maennlich ? 1 : 2];
+  }
+
+  function referenzPha(alter, maennlich) {
+    const punkte = PHA_REFERENZ.map(([mitte, m, w]) => [mitte, maennlich ? m : w]);
+    if (alter <= punkte[0][0]) return punkte[0][1];
+    for (let i = 0; i < punkte.length - 1; i++) {
+      const [a1, p1] = punkte[i], [a2, p2] = punkte[i + 1];
+      if (alter <= a2) return p1 + (p2 - p1) * (alter - a1) / (a2 - a1);
+    }
+    return punkte[punkte.length - 1][1];
+  }
+
+  /** Wie tanita_auswertung.lade() für eine Messung: werte = Kürzel → Text */
+  function messung(werte, t) {
+    const m = { t, roh: werte, seg: {} };
+    for (const k of ["Wk", "FW", "mW", "MW", "wW", "ww", "AG", "Hm", "Pt"]) m[k] = werte[k] === "" ? null : zahlText(werte[k]);
+    m.GE = werte.GE ?? "1";
+    for (const k of ["r", "l", "R", "L", "M", "H", "F"]) {
+      const [r6, x6, r50, x50] = ["U", "V", "R", "X"].map(c => werte[c + k] === "" ? null : zahlText(werte[c + k]));
+      if ([r6, x6, r50, x50].some(fehlt) || !r6 || !r50) continue;
+      m.seg[k] = { R6: r6, X6: x6, R50: r50, X50: x50, Q: r6 / r50,
+                   PhA50: Math.atan(-x50 / r50) * 180 / Math.PI, PhA6: Math.atan(-x6 / r6) * 180 / Math.PI };
+    }
+    // ECW nach Guricci/Deurenberg 1999, mit der Impedanz Hand–Fuß rechts bei 6,25 kHz
+    const s = m.seg.M;
+    if (s && m.Hm && m.Wk && m.wW) {
+      const ecw = 0.187 * m.Hm ** 2 / Math.hypot(s.R6, s.X6) + 0.06 * m.Wk + 1.6;
+      Object.assign(m, { ECW: ecw, ICW: m.wW - ecw, ECW_TBW: 100 * ecw / m.wW });
+    }
+    return m;
+  }
+
+  // ---------------------------------------------------------------- Grafiken
+  function skala(wert, minimum, maximum, normalVon, normalBis, tks, text, breite = 300) {
+    const h = 32;
+    const x = v => 4 + (Math.min(Math.max(v, minimum), maximum) - minimum) / (maximum - minimum) * (breite - 8);
+    const t = [`<svg width="${breite}" height="${h}" viewBox="0 0 ${breite} ${h}">`,
+               `<rect x="${f1(x(normalVon))}" y="10" width="${f1(x(normalBis) - x(normalVon))}" height="12" fill="${C.normal}"/>`];
+    for (const k of tks) {
+      t.push(`<line x1="${f1(x(k))}" y1="8" x2="${f1(x(k))}" y2="24" stroke="${C.linie}" stroke-width="0.8"/>`);
+      t.push(`<text x="${f1(x(k))}" y="7" font-size="7" fill="${C.grau}" text-anchor="middle">${z(k, k === int(k) ? 0 : 1)}</text>`);
+    }
+    if (!fehlt(wert)) {
+      t.push(`<rect x="4" y="13" width="${f1(x(wert) - 4)}" height="6" fill="${C.balken}" rx="1"/>`);
+      const anker = x(wert) > breite - 40 ? "end" : "start";
+      const dx = anker === "end" ? -3 : 4;
+      t.push(`<text x="${f1(x(wert) + dx)}" y="31" font-size="10" font-weight="700" ` +
+             `fill="${C.text}" text-anchor="${anker}">${e(text)}</text>`);
+    }
+    t.push("</svg>");
+    return t.join("");
+  }
+
+  function bewertung(stufe) {
+    const n = zahlText(stufe);
+    if (n === null) return "–";
+    const s = int(n), punkte = [];
+    for (let i = -4; i < 5; i++) {
+      if (i === s) punkte.push(`<circle cx="${6 + (i + 4) * 8}" cy="5" r="3.6" fill="${Math.abs(s) <= 1 ? C.gut : C.warn}"/>`);
+      else punkte.push(`<circle cx="${6 + (i + 4) * 8}" cy="5" r="1.6" fill="${C.linie}"/>`);
+    }
+    punkte.unshift(`<rect x="${6 + 3 * 8 - 4}" y="0" width="${2 * 8 + 8}" height="10" rx="5" fill="${C.akzent_hell}"/>`);
+    return `<svg width="80" height="10">${punkte.join("")}</svg><span class="stufe">${s >= 0 ? "+" : ""}${s}</span>`.replace(">+0<", ">0<");
+  }
+
+  function phasenwinkelGrafik(alter, pha, maennlich, vorsprung = null, breite = 250, hoehe = 150) {
+    const li = 28, re = 8, ob = 10, un = 22;
+    const aMin = 15, aMax = 80, pMin = 4.5, pMax = Math.max(8.5, (pha || 0) + 0.4);
+    const px = a => li + (a - aMin) / (aMax - aMin) * (breite - li - re);
+    const py = p => ob + (pMax - p) / (pMax - pMin) * (hoehe - ob - un);
+    const t = [`<svg width="${breite}" height="${hoehe}" viewBox="0 0 ${breite} ${hoehe}">`];
+    const eigene = PHA_REFERENZ.map(([m, mw, ww]) => [m, maennlich ? mw : ww]);
+    const bandOben = eigene.map(([a, p]) => `${f1(px(a))},${f1(py(p + 0.5))}`).join(" ");
+    const bandUnten = eigene.slice().reverse().map(([a, p]) => `${f1(px(a))},${f1(py(p - 0.5))}`).join(" ");
+    t.push(`<polygon points="${bandOben} ${bandUnten}" fill="${C.akzent_hell}"/>`);
+    for (let p = 5; p < int(pMax) + 1; p++) {
+      t.push(`<line x1="${li}" x2="${breite - re}" y1="${f1(py(p))}" y2="${f1(py(p))}" stroke="${C.linie}" stroke-width="0.6"/>`);
+      t.push(`<text x="${li - 4}" y="${f1(py(p) + 3)}" font-size="7" text-anchor="end" fill="${C.grau}">${p}°</text>`);
+    }
+    for (const a of [20, 30, 40, 50, 60, 70, 80])
+      t.push(`<text x="${f1(px(a))}" y="${hoehe - 8}" font-size="7" text-anchor="middle" fill="${C.grau}">${a}</text>`);
+    t.push(`<text x="${breite - re}" y="${hoehe - 0.5}" font-size="7" text-anchor="end" fill="${C.grau}">Alter</text>`);
+    [["Männer", "#0f5e7a"], ["Frauen", "#b5527a"]].forEach(([name, farbe], idx) => {
+      const pkt = PHA_REFERENZ.map(r => `${f1(px(r[0]))},${f1(py(r[1 + idx]))}`).join(" ");
+      const dicke = (idx === 0) === maennlich ? 2 : 1;
+      t.push(`<polyline points="${pkt}" fill="none" stroke="${farbe}" stroke-width="${dicke}" opacity="${dicke === 2 ? 1 : 0.55}"/>`);
+      const erste = PHA_REFERENZ[0];
+      t.push(`<text x="${f1(px(erste[0]))}" y="${f1(py(erste[1 + idx]) + (idx === 0 ? -4 : 10))}" font-size="7" ` +
+             `fill="${farbe}">${name}</text>`);
+    });
+    if (pha && !fehlt(vorsprung) && alter < 80) {
+      const reihe = [];
+      for (let i = 0; i < int(80 - alter) + 1; i += 2) reihe.push(alter + i);
+      const pkt = reihe.map(a => `${f1(px(a))},${f1(py(referenzErweitert(a, maennlich) + vorsprung))}`).join(" ");
+      t.push(`<polyline points="${pkt}" fill="none" stroke="${C.text}" stroke-width="1.2" stroke-dasharray="3,2.5"/>`);
+    }
+    if (pha) {
+      t.push(`<circle cx="${f1(px(alter))}" cy="${f1(py(pha))}" r="5" fill="${C.text}" stroke="white" stroke-width="1.5"/>`);
+      t.push(`<text x="${f1(px(alter) + 8)}" y="${f1(py(pha) + 3)}" font-size="9" font-weight="700" fill="${C.text}">${z(pha, 1)}°</text>`);
+    }
+    t.push("</svg>");
+    return t.join("");
+  }
+
+  function wasserGrafik(icw, ecw, breite = 250) {
+    if (fehlt(icw) || fehlt(ecw)) return "";
+    const wIcw = (breite - 2) * icw / (icw + ecw);
+    return `<svg width="${breite}" height="34"><rect x="1" y="2" width="${f1(wIcw)}" height="20" fill="#2e5e7e" rx="2"/>` +
+      `<rect x="${f1(1 + wIcw)}" y="2" width="${f1(breite - 2 - wIcw)}" height="20" fill="#7fbcd6" rx="2"/>` +
+      `<text x="${f1(wIcw / 2)}" y="16" font-size="9" fill="white" text-anchor="middle">ICW ${z(icw, 1)} l</text>` +
+      `<text x="${f1(1 + wIcw + (breite - 2 - wIcw) / 2)}" y="16" font-size="9" fill="#1d2b33" text-anchor="middle">ECW ${z(ecw, 1)} l</text>` +
+      `<text x="1" y="32" font-size="7" fill="${C.grau}">in den Zellen</text>` +
+      `<text x="${breite - 1}" y="32" font-size="7" fill="${C.grau}" text-anchor="end">außerhalb der Zellen</text></svg>`;
+  }
+
+  const seitendifferenz = (a, b) => fehlt(a) || fehlt(b) || a + b === 0 ? null : 200 * (a - b) / (a + b);
+
+  // ---------------------------------------------------------------- Aussagen
+  function kernaussagen(m, maennlich, alter) {
+    const aus = [];
+    const bmi = zahl(m, "MI");
+    if (bmi !== null) {
+      if (bmi < 18.5) aus.push([C.warn, `BMI ${z(bmi)}: unter dem Normalbereich (18,5–25).`]);
+      else if (bmi < 25) aus.push([C.gut, `BMI ${z(bmi)}: im Normalbereich (18,5–25).`]);
+      else aus.push([C.warn, `BMI ${z(bmi)}: über dem Normalbereich (18,5–25). Den BMI immer zusammen mit Muskel- und Fettanteil betrachten.`]);
+    }
+    const fw = zahl(m, "FW");
+    if (fw !== null) {
+      const [von, bis] = fettbereich(alter, maennlich);
+      if (fw < von) aus.push([C.warn, `Körperfett ${z(fw)} %: unter dem gesunden Bereich (${von}–${bis} %).`]);
+      else if (fw <= bis) aus.push([C.gut, `Körperfett ${z(fw)} %: im gesunden Bereich für Alter und Geschlecht (${von}–${bis} %).`]);
+      else aus.push([C.warn, `Körperfett ${z(fw)} %: über dem gesunden Bereich (${von}–${bis} %).`]);
+    }
+    const pha = seg(m, "M").PhA50;
+    if (pha) {
+      const ref = referenzPha(alter, maennlich), d = pha - ref;
+      if (d >= 0.5) aus.push([C.gut, `Phasenwinkel ${z(pha)}°: deutlich über dem Mittel Ihrer Alters- und Geschlechtsgruppe ` +
+                                     `(${z(ref)}°). Spricht für viel aktive Zellmasse und gut versorgte Muskulatur.`]);
+      else if (d >= -0.5) aus.push([C.gut, `Phasenwinkel ${z(pha)}°: im Bereich des Mittels Ihrer Alters- und Geschlechtsgruppe (${z(ref)}°).`]);
+      else aus.push([C.warn, `Phasenwinkel ${z(pha)}°: unter dem Mittel Ihrer Alters- und Geschlechtsgruppe (${z(ref)}°). ` +
+                             "Mehr Muskelaufbau und gute Erholung heben ihn meist an."]);
+    }
+    const vf = zahl(m, "IF");
+    if (vf !== null)
+      aus.push([vf <= 12 ? C.gut : C.warn, `Viszeralfett Stufe ${int(vf)}: ${vf <= 12 ? "gesund (1–12)" : "erhöht (über 12)"}.`]);
+    // Seitenvergleich: größte Abweichung von Muskelmasse und Phasenwinkel
+    const kandidaten = [];
+    for (const [[a, b], name] of [[["r", "l"], "Arme"], [["R", "L"], "Beine"]]) {
+      const dm = seitendifferenz(zahl(m, "m" + a), zahl(m, "m" + b));
+      const dp = seitendifferenz(seg(m, a).PhA50, seg(m, b).PhA50);
+      for (const [d, was] of [[dm, "Muskelmasse"], [dp, "Phasenwinkel"]]) if (d !== null) kandidaten.push([Math.abs(d), d, name, was]);
+    }
+    if (kandidaten.length) {
+      const vergleich = (x, y) => { for (let i = 0; i < 4; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; return 0; };
+      const [, d, name, was] = kandidaten.reduce((x, y) => vergleich(y, x) > 0 ? y : x);
+      if (Math.abs(d) >= 5)
+        aus.push([C.warn, `Seitenvergleich: ${was} der ${name} rechts ${d > 0 ? "höher" : "niedriger"} als links ` +
+                          `(${z(Math.abs(d))} %). Ab etwa 5 % lohnt es sich, das im Training zu beachten.`]);
+      else aus.push([C.gut, `Seitenvergleich: Arme und Beine sind ausgeglichen (größte Abweichung ${z(Math.abs(d))} %, ${was} ${name}).`]);
+    }
+    return aus;
+  }
+
+  // ---------------------------------------------------------------- ECW/TBW
+  const ECW_STUFEN = [[0.390, "Optimal", "gut"], [0.400, "Verbesserungswürdig", "warn"], [9.9, "Erhöht", "hoch"]];
+  function ecwBewertung(q) {
+    for (const [grenze, text, farbe] of ECW_STUFEN) if (q <= grenze) return [text, C[farbe]];
+    return ["–", C.grau];
+  }
+  function ecwSkala(q, breite = 250) {
+    const lo = 0.320, hi = 0.450;
+    const x = v => 2 + (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * (breite - 4);
+    const t = [`<svg width="${breite}" height="34" viewBox="0 0 ${breite} 34">`,
+      `<rect x="${f1(x(lo))}" y="9" width="${f1(x(0.390) - x(lo))}" height="9" fill="#d9eee1"/>`,
+      `<rect x="${f1(x(0.360))}" y="9" width="${f1(x(0.390) - x(0.360))}" height="9" fill="${C.normal}"/>`,
+      `<rect x="${f1(x(0.390))}" y="9" width="${f1(x(0.400) - x(0.390))}" height="9" fill="#f6d7b5"/>`,
+      `<rect x="${f1(x(0.400))}" y="9" width="${f1(x(hi) - x(0.400))}" height="9" fill="#f2c0b9"/>`];
+    for (const v of [0.34, 0.36, 0.38, 0.39, 0.40, 0.42, 0.44])
+      t.push(`<text x="${f1(x(v))}" y="7" font-size="6.5" fill="${C.grau}" text-anchor="middle">${z(v, 2)}</text>`);
+    if (q) t.push(`<path d="M${f1(x(q))},19 l-5,8 h10 z" fill="${C.text}"/>`);
+    t.push(`<text x="${f1(x(0.355))}" y="33" font-size="6.5" fill="${C.grau}" text-anchor="middle">optimal</text>`);
+    t.push(`<text x="${f1(x(0.395))}" y="33" font-size="6.5" fill="${C.grau}" text-anchor="middle">verb.</text>`);
+    t.push(`<text x="${f1(x(0.425))}" y="33" font-size="6.5" fill="${C.grau}" text-anchor="middle">erhöht</text>`);
+    t.push("</svg>");
+    return t.join("");
+  }
+
+  // ---------------------------------------------------------------- Phasenwinkel-Prognose
+  function referenzErweitert(alter, maennlich) {
+    if (alter <= 75) return referenzPha(alter, maennlich);
+    const p65 = referenzPha(65, maennlich), p75 = referenzPha(75, maennlich);
+    return p75 + (p75 - p65) / 10 * (alter - 75);
+  }
+  function phaPrognose(alter, pha, maennlich) {
+    if (!pha) return [null, null];
+    const refHeute = referenzPha(alter, maennlich), vorsprung = pha - refHeute;
+    let gehalten = null;
+    if (vorsprung > 0) {
+      let a = alter;
+      while (a < 100 && referenzErweitert(a, maennlich) + vorsprung > refHeute) a += 0.5;
+      gehalten = int(a);
+    }
+    let zellalter = null;
+    for (let a10 = 180; a10 < 1000; a10 += 5)
+      if (referenzErweitert(a10 / 10, maennlich) <= pha) { zellalter = a10 / 10; break; }
+    return [gehalten, zellalter];
+  }
+
+  // ---------------------------------------------------------------- Empfehlungen
+  function empfehlungen(m, maennlich, alter) {
+    const aus = [];
+    const wk = m.Wk, fw = m.FW, rb = zahl(m, "rB");
+    const [, bis] = fettbereich(alter, maennlich);
+    if (wk) aus.push(["Eiweiß", `${rund(1.2 * wk)}–${rund(1.6 * wk)} g am Tag (1,2–1,6 g/kg), auf 3–4 Mahlzeiten verteilt.`]);
+    if (!fehlt(fw) && rb) {
+      const gesamt = rund(rb * 1.5, -1);
+      if (fw > bis) aus.push(["Körperfett senken", `300–500 kcal unter dem Bedarf von etwa ${fx(gesamt, 0)} kcal am Tag essen, ` +
+                                                   "langsam abnehmen, damit die Muskeln bleiben."]);
+      else aus.push(["Energie", `Bedarf etwa ${fx(gesamt, 0)} kcal am Tag (Grundumsatz × 1,5). Für Muskelaufbau 200–300 kcal mehr.`]);
+    }
+    let schwach = [["r", "rechter Arm"], ["l", "linker Arm"], ["R", "rechtes Bein"], ["L", "linkes Bein"], ["T", "Rumpf"]]
+      .filter(([k]) => (zahl(m, "s" + k) || 0) <= -1).map(([, n]) => n);
+    const ausgleich = [];
+    for (const [[a, b], nm, uebung] of [[["R", "L"], "Bein", "Ausfallschritte, Split Squats, einbeinige Beinpresse"],
+                                        [["r", "l"], "Arm", "einarmige Kurzhantel-Übungen"]]) {
+      const dp = seitendifferenz(seg(m, a).PhA50, seg(m, b).PhA50);
+      const dm = seitendifferenz(zahl(m, "m" + a), zahl(m, "m" + b));
+      let groesste = null;
+      for (const d of [dp, dm]) if (d !== null && (groesste === null || Math.abs(d) > Math.abs(groesste))) groesste = d;
+      if (groesste !== null && Math.abs(groesste) >= 5) ausgleich.push(`${groesste > 0 ? "linkes" : "rechtes"} ${nm} stärken (${uebung})`);
+    }
+    if (schwach.length || ausgleich.length) {
+      let text = ausgleich.length ? ausgleich.join("; ") : "";
+      schwach = schwach.filter(n => !text.toLowerCase().includes(n.toLowerCase()));
+      if (schwach.length) text = (text ? text + ". " : "") + "Unter dem Durchschnitt: " + schwach.join(", ");
+      aus.push(["Krafttraining", text[0].toUpperCase() + text.slice(1) + ". Mit der schwächeren Seite beginnen, 2–3 Einheiten pro Woche."]);
+    } else aus.push(["Krafttraining", "Ausgeglichen und im Normalbereich: 2–3 Ganzkörper-Einheiten pro Woche beibehalten."]);
+    const pha = seg(m, "M").PhA50;
+    if (pha) {
+      if (pha >= referenzPha(alter, maennlich)) aus.push(["Phasenwinkel halten", "Kraft plus 150 Minuten Ausdauer pro Woche, 7–8 Stunden Schlaf, Erholungstage."]);
+      else aus.push(["Phasenwinkel steigern", "Krafttraining, genug Eiweiß, 7–8 Stunden Schlaf. Nach 8–12 Wochen vergleichen."]);
+    }
+    if ((m.ECW_TBW || 0) / 100 > 0.390) aus.push(["Wasserhaushalt", "ECW erhöht: Erholung, weniger Salz, Beine hochlegen. Bleibt es so, ärztlich abklären."]);
+    const vf = zahl(m, "IF");
+    if (vf !== null && vf > 12) aus.push(["Bauchfett", "Ausdauertraining, weniger Zucker und Alkohol."]);
+    aus.push(["Nächste Messung", "Gleiche Uhrzeit, morgens nüchtern, ohne Training am Vortag."]);
+    return aus;
+  }
+
+  // ---------------------------------------------------------------- Blatt
+  function html(m, name = "") {
+    const maennlich = m.GE !== "2";
+    const alter = m.AG || 0, groesse = m.Hm || 0;
+    const h2 = groesse ? (groesse / 100) ** 2 : null;
+    const wk = m.Wk, fw = m.FW, fmasse = zahl(m, "fW");
+    const sw = zahl(m, "Sw"), smus = zahl(m, "SM"), ffm = zahl(m, "MW"), mus = zahl(m, "mW");
+    const tbw = zahl(m, "wW"), protein = zahl(m, "Pr"), knochen = zahl(m, "bW");
+    const [fettVon, fettBis] = fettbereich(alter, maennlich);
+    const pha = seg(m, "M").PhA50;
+    const phaRef = referenzPha(alter, maennlich);
+
+    // ---- Körperzusammensetzung: gestapelter Balken Gewicht = Fett + Muskel + Knochen
+    const [wasserVon, wasserBis] = maennlich ? [50, 65] : [45, 60];
+    const teile = [[fmasse, "Fett", C.links], [mus, "Muskelmasse", C.rechts], [knochen, "Knochen", C.grau]];
+    let stapel;
+    if ([wk, fmasse, mus, knochen].some(fehlt)) stapel = "";
+    else {
+      const breite = 440, svg = [];
+      let xpos = 0.0;
+      for (const [wert, name_, farbe] of teile) {
+        const w = breite * wert / wk;
+        svg.push(`<rect x="${f1(xpos)}" y="0" width="${f1(w)}" height="22" fill="${farbe}"/>`);
+        if (w > 40) svg.push(`<text x="${f1(xpos + w / 2)}" y="15" font-size="9" fill="white" text-anchor="middle">` +
+                             `${name_} ${z(wert)} kg</text>`);
+        xpos += w;
+      }
+      stapel = `<svg width="${breite}" height="24">${svg.join("")}</svg>` +
+        `<div class="notiz" style="margin:0 0 4px">Gewicht ${z(wk)} kg = Fett + Muskelmasse (enthält das Körperwasser) + Knochenmineralien</div>`;
+    }
+    const zusammensetzung = `
+    ${stapel}
+    <table class="komp">
+      <tr><th></th><th>Wert</th><th>Normalbereich</th><th></th><th>Wert</th><th>Normalbereich</th></tr>
+      <tr><td>Körperwasser</td><td class="w">${z(tbw)} l</td><td class="n">${wasserVon}–${wasserBis} % (${z(zahl(m, "ww"))} %)</td>
+          <td>Fettmasse</td><td class="w">${z(fmasse)} kg</td><td class="n">${z(sw ? sw * fettVon / 100 : null)}–${z(sw ? sw * fettBis / 100 : null)} kg</td></tr>
+      <tr><td>Protein</td><td class="w">${z(protein)} kg</td><td class="n"></td>
+          <td>Fettfreie Masse</td><td class="w">${z(ffm)} kg</td><td class="n"></td></tr>
+      <tr><td>Knochenmineralien</td><td class="w">${z(knochen)} kg</td><td class="n"></td>
+          <td>Muskelmasse</td><td class="w">${z(mus)} kg</td><td class="n">${z(smus ? smus * 0.9 : null)}–${z(smus ? smus * 1.1 : null)} kg</td></tr>
+    </table>`;
+
+    // ---- Skalen
+    const [wVon, wBis] = h2 ? [18.5 * h2, 25 * h2] : [40, 80];
+    const wMin = Math.floor(wVon * 0.8 / 10) * 10, wMax = Math.ceil(wBis * 1.5 / 10) * 10;
+    const [mMin, mMax] = smus ? [Math.floor(smus * 0.7 / 5) * 5, Math.ceil(smus * 1.4 / 5) * 5] : [20, 80];
+    const fMax = maennlich ? 35 : 45;
+    const wer = maennlich ? "Männer" : "Frauen";
+    const altersband = alter <= 39 ? "20–39" : alter <= 59 ? "40–59" : "60–79";
+    const gr = z(groesse, 0);
+    const skalenMf = [
+      ["Gewicht", "kg", skala(wk, wMin, wMax, wVon, wBis, ticks(wMin, wMax, 10), z(wk, 1)),
+       `für ${gr} cm: ${z(wVon)}–${z(wBis)} kg (BMI 18,5–25)`],
+      ["Muskelmasse", "kg", skala(mus, mMin, mMax, smus ? smus * 0.9 : 0, smus ? smus * 1.1 : 0, ticks(mMin, mMax, 5), z(mus, 1)),
+       `${wer}, ${gr} cm: Tanita-Standard ${z(smus)} kg ± 10 %`],
+      ["Fettmasse", "kg", skala(fmasse, 0, fMax, sw ? sw * fettVon / 100 : 0, sw ? sw * fettBis / 100 : 0, ticks(0, fMax, 5), z(fmasse, 1)),
+       `${wer} ${altersband} J.: ${fettVon}–${fettBis} % vom Normalgewicht`],
+    ];
+    const skalenFl = [
+      ["BMI", "kg/m²", skala(zahl(m, "MI"), 15, 40, 18.5, 25, [15, 18.5, 25, 30, 35, 40], z(zahl(m, "MI"), 1)), "Erwachsene (WHO): 18,5–25"],
+      ["Körperfett", "%", skala(fw, 0, 45, fettVon, fettBis, ticks(0, 45, 5), z(fw, 1)), `${wer} ${altersband} Jahre: ${fettVon}–${fettBis} %`],
+      ["Viszeralfett", "Stufe", skala(zahl(m, "IF"), 1, 30, 1, 12, [1, 5, 10, 12, 15, 20, 25, 30], z(zahl(m, "IF"), 0)), "Tanita: 1–12 gesund"],
+    ];
+    const skalentabelle = zeilen => "<table class='skalen'>" + zeilen.map(([n, ei, s, b]) =>
+      `<tr><td class='lbl'>${e(n)} <span class='einh'>(${e(ei)})</span><span class='bezug'>${e(b)}</span></td>` +
+      `<td>${s}</td></tr>`).join("") + "</table>";
+
+    // ---- Segmente
+    const segZeilen = [];
+    for (const [k, name_] of [["r", "Rechter Arm"], ["l", "Linker Arm"], ["T", "Rumpf"], ["R", "Rechtes Bein"], ["L", "Linkes Bein"]]) {
+      const imp = m.seg[k];
+      segZeilen.push(
+        `<tr><td class='lbl'><span class='punkt' style='background:${name_.includes("Recht") ? C.rechts : name_.includes("Link") ? C.links : C.grau}'></span>${name_}</td>` +
+        `<td class='w'>${z(zahl(m, "m" + k))} kg</td><td>${bewertung(m.roh["s" + k])}</td>` +
+        `<td class='w'>${z(zahl(m, "F" + k))} %</td><td>${bewertung(m.roh["S" + k])}</td>` +
+        `<td class='w'>${imp ? z(imp.PhA50, 1) + "°" : "–"}</td>` +
+        `<td class='w'>${imp ? z(imp.Q, 3) : "–"}</td></tr>`);
+    }
+    const seiten = [];
+    for (const [[a, b], nm] of [[["r", "l"], "Arme"], [["R", "L"], "Beine"]]) {
+      const dm = seitendifferenz(zahl(m, "m" + a), zahl(m, "m" + b));
+      const dp = seitendifferenz(seg(m, a).PhA50, seg(m, b).PhA50);
+      seiten.push(`${nm}: Muskel ${(dm || 0) >= 0 ? "+" : "−"}${z(dm !== null ? Math.abs(dm) : null)} %, ` +
+                  `Phasenwinkel ${(dp || 0) >= 0 ? "+" : "−"}${z(dp !== null ? Math.abs(dp) : null)} %`);
+    }
+
+    // ---- Impedanzen
+    const impZeilen = [["M", "Hand–Fuß re"], ["H", "Hand–Fuß li"], ["r", "Arm re"], ["l", "Arm li"], ["R", "Bein re"], ["L", "Bein li"], ["F", "Fuß–Fuß"]]
+      .filter(([k]) => m.seg[k]).map(([k, n]) => { const s = m.seg[k];
+        return `<tr><td>${e(n)}</td><td>${z(s.R6)}</td><td>${z(s.X6)}</td><td>${z(s.R50)}</td>` +
+               `<td>${z(s.X50)}</td><td>${z(s.PhA50, 2)}°</td></tr>`; }).join("");
+
+    const aussagen = kernaussagen(m, maennlich, alter)
+      .map(([f, t]) => `<li><span class='marke' style='background:${f}'></span>${e(t)}</li>`).join("");
+
+    const diff = pha ? pha - phaRef : null;
+    const zielgewicht = h2 ? 22 * h2 : null;
+
+    const [gehalten, zellalter] = phaPrognose(alter, pha, maennlich);
+    let prognose = "";
+    if (zellalter !== null) {
+      const zell = zellalter <= 18 ? "unter 20 Jahren" : `etwa ${int(rund(zellalter))}-Jährigen`;
+      prognose += `Ihr Wert entspricht dem Mittel von ${zell}. `;
+    }
+    if (gehalten && gehalten > alter + 1)
+      prognose += `Bleibt Ihr Vorsprung erhalten, haben Sie mit <b>${gehalten} Jahren</b> noch den Phasenwinkel eines ` +
+                  `heute ${int(alter)}-jährigen Durchschnitts${maennlich ? "manns" : "frau"}.`;
+
+    const ecwQ = (m.ECW_TBW || 0) / 100 || null;
+    const [ecwText, ecwFarbe] = ecwQ ? ecwBewertung(ecwQ) : ["–", C.grau];
+    const icwAnteil = m.ICW && tbw ? 100 * m.ICW / tbw : null;
+
+    const massnahmen = empfehlungen(m, maennlich, alter).map(([t, x]) => `<li><b>${e(t)}:</b> ${e(x)}</li>`).join("");
+    const zw = n => String(n).padStart(2, "0"), d = m.t;
+    const datum = `${zw(d.getDate())}.${zw(d.getMonth() + 1)}.${d.getFullYear()}  ${zw(d.getHours())}:${zw(d.getMinutes())}`;
+
+    return `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Körperanalyse</title>
+<style>
+@page { size: A4; margin: 8mm 10mm 6mm 10mm; }
+* { box-sizing: border-box; }
+body { font-family: "Segoe UI", Arial, sans-serif; color: ${C.text}; font-size: 8.6pt; margin: 0; }
+.kopfzeile { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid ${C.akzent}; padding-bottom: 4px; }
+.titel { font-size: 21pt; font-weight: 700; color: ${C.akzent}; letter-spacing: -0.5px; line-height: 1; }
+.titel small { display: block; font-size: 8pt; font-weight: 400; color: ${C.grau}; letter-spacing: 0; margin-top: 3px; }
+.geraet { text-align: right; color: ${C.grau}; font-size: 7.5pt; }
+.person { display: grid; grid-template-columns: 2.2fr 1fr 1fr 1fr 1.2fr 1.6fr; border-bottom: 1px solid ${C.linie}; margin-bottom: 6px; }
+.person div { padding: 3px 6px; border-left: 1px solid ${C.linie}; }
+.person div:first-child { border-left: 0; padding-left: 0; }
+.person span { display: block; font-size: 6.8pt; color: ${C.grau}; }
+.person b { font-size: 10pt; font-weight: 600; }
+.raster { display: grid; grid-template-columns: 1fr 268px; gap: 10px; }
+h2 { font-size: 10.5pt; color: ${C.akzent}; margin: 7px 0 3px; padding-bottom: 2px; border-bottom: 1px solid ${C.linie}; }
+h2 small { font-weight: 400; color: ${C.grau}; font-size: 7pt; }
+.blick { background: ${C.akzent_hell}; border-radius: 6px; padding: 6px 9px 4px; margin-top: 2px; }
+.blick h2 { margin-top: 0; border: 0; }
+.blick ul { margin: 0; padding: 0; list-style: none; }
+.blick li { margin: 0 0 3px; padding-left: 13px; position: relative; line-height: 1.3; }
+.marke { position: absolute; left: 0; top: 4px; width: 7px; height: 7px; border-radius: 50%; }
+table { border-collapse: collapse; width: 100%; }
+.komp th { font-size: 7pt; color: ${C.grau}; font-weight: 600; text-align: left; padding: 2px 4px; }
+.komp td { padding: 3px 4px; border-bottom: 1px solid ${C.linie}; }
+.komp td.w { font-weight: 700; font-size: 9.5pt; white-space: nowrap; }
+.komp td.n { color: ${C.grau}; font-size: 7.5pt; white-space: nowrap; }
+.komp td.blk { text-align: center; border: 1px solid ${C.linie}; background: #f6f9fa; font-size: 7.5pt; width: 92px; }
+.komp td.b2 { background: ${C.akzent_hell}; }
+.komp td.klein { font-size: 7pt; }
+.skalen td { padding: 1px 4px; vertical-align: middle; }
+.skalen td.lbl { width: 104px; font-weight: 600; }
+.einh { font-weight: 400; color: ${C.grau}; font-size: 7pt; }
+.skalen tr.kopf td { font-size: 7pt; color: white; padding: 0 4px; }
+.skalen tr.kopf span { display: inline-block; padding: 1px 0; text-align: center; background: #8aa2ad; }
+.skalen .u { width: 22%; } .skalen .nm { width: 26%; background: #5b8a72 !important; } .skalen .ue { width: 52%; }
+.seg th { font-size: 7pt; color: ${C.grau}; font-weight: 600; text-align: left; padding: 2px 4px; border-bottom: 1px solid ${C.linie}; }
+.seg td { padding: 2.5px 4px; border-bottom: 1px solid ${C.linie}; white-space: nowrap; }
+.seg td.w { font-weight: 600; text-align: right; }
+.seg td.lbl { font-weight: 600; }
+.punkt { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+.stufe { font-size: 7pt; color: ${C.grau}; margin-left: 3px; }
+.notiz { font-size: 7pt; color: ${C.grau}; margin: 3px 0 0; line-height: 1.35; }
+.karte { border: 1px solid ${C.linie}; border-radius: 6px; padding: 6px 8px; margin-bottom: 7px; }
+.karte h3 { font-size: 9.5pt; margin: 0 0 4px; color: ${C.akzent}; }
+.gross { font-size: 22pt; font-weight: 700; line-height: 1; }
+.gross small { font-size: 9pt; font-weight: 400; color: ${C.grau}; }
+.zeile { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px dotted ${C.linie}; }
+.zeile:last-child { border-bottom: 0; }
+.zeile b { font-weight: 600; }
+.imp th, .imp td { font-size: 7pt; padding: 1.5px 3px; text-align: right; border-bottom: 1px solid ${C.linie}; }
+.imp th { color: ${C.grau}; font-weight: 600; }
+.imp td:first-child, .imp th:first-child { text-align: left; }
+.fuss { margin-top: 6px; border-top: 1px solid ${C.linie}; padding-top: 3px; font-size: 6.5pt; color: ${C.grau}; }
+.fuss span { display: block; }
+.bezug { display: block; font-weight: 400; font-size: 6.3pt; color: ${C.grau}; line-height: 1.2; }
+.skalen td.lbl { width: 128px; }
+.urteil { color: white; font-size: 7pt; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+.prognose { background: ${C.akzent_hell}; border-radius: 4px; padding: 4px 6px; font-size: 7.6pt; line-height: 1.35; margin-top: 2px; }
+.empfehlung { border: 1px solid ${C.linie}; border-left: 4px solid ${C.gut}; border-radius: 6px; padding: 4px 10px 4px; margin-top: 4px; }
+.empfehlung h2 { border: 0; margin: 2px 0; }
+.empfehlung ul { margin: 0; padding-left: 13px; }
+.empfehlung li { margin: 0 0 2px; line-height: 1.3; font-size: 8pt; }
+</style></head><body>
+
+<div class="kopfzeile">
+  <div class="titel">Körperanalyse<small>Bioelektrische Impedanzanalyse · 6,25 und 50 kHz · 8 Elektroden</small></div>
+  <div class="geraet">Tanita MC-580<br>Auswertung: Tanita-Empfänger</div>
+</div>
+<div class="person">
+  <div><span>Name</span><b>${e(name) || "&nbsp;"}</b></div>
+  <div><span>Größe</span><b>${z(groesse, 1)} cm</b></div>
+  <div><span>Alter</span><b>${int(alter)}</b></div>
+  <div><span>Geschlecht</span><b>${maennlich ? "männlich" : "weiblich"}</b></div>
+  <div><span>Kleidung (abgezogen)</span><b>${z(m.Pt, 1)} kg</b></div>
+  <div><span>Datum / Uhrzeit</span><b>${datum}</b></div>
+</div>
+
+<div class="raster">
+<div>
+  <div class="blick"><h2>Auf einen Blick</h2><ul>${aussagen}</ul></div>
+
+  <h2>Körperzusammensetzung</h2>
+  ${zusammensetzung}
+
+  <h2>Muskel-Fett-Analyse <small>Normalbereich grün hinterlegt</small></h2>
+  ${skalentabelle(skalenMf)}
+
+  <h2>Fettanalyse</h2>
+  ${skalentabelle(skalenFl)}
+
+  <h2>Segmentanalyse <small>Bewertung −4 … +4 im Vergleich zu Personen gleicher Größe und gleichen Gewichts</small></h2>
+  <table class="seg">
+    <tr><th>Segment</th><th style="text-align:right">Muskel</th><th>Bewertung</th><th style="text-align:right">Fett</th><th>Bewertung</th>
+        <th style="text-align:right">Phasenw.</th><th style="text-align:right">R6/R50</th></tr>
+    ${segZeilen.join("")}
+  </table>
+  <p class="notiz"><b>Rechts zu links:</b> ${e(seiten[0])} · ${e(seiten[1])}. Höherer Phasenwinkel = mehr intakte Zellmasse,
+  kleineres R6,25/R50 = mehr Wasser außerhalb der Zellen (z. B. nach Belastung).</p>
+
+  <div class="empfehlung"><h2>Empfehlungen</h2><ul>${massnahmen}</ul></div>
+</div>
+
+<div>
+  <div class="karte" style="margin-top:2px">
+    <h3>Phasenwinkel</h3>
+    <div class="gross">${z(pha, 1)}°<small> &nbsp;bei 50 kHz</small></div>
+    <div style="margin:2px 0 0; font-size:8pt">${(diff || 0) >= 0 ? "+" : "−"}${z(diff !== null ? Math.abs(diff) : null, 1)}° zum Mittel für ${maennlich ? "Männer" : "Frauen"} mit ${int(alter)} Jahren (${z(phaRef, 1)}°)</div>
+    ${phasenwinkelGrafik(alter, pha, maennlich, diff)}
+    ${prognose ? `<div class="prognose">${prognose}</div>` : ""}
+    <p class="notiz">Band: Mittel ± 0,5°, gestrichelt: Fortschreibung mit gleichem Vorsprung. Maß für Zellgesundheit und
+    Muskelqualität, sinkt mit dem Alter, steigt mit Muskelmasse und Fitness.</p>
+  </div>
+
+  <div class="karte">
+    <h3>Körperwasser</h3>
+    <div class="zeile"><span>Gesamtkörperwasser</span><b>${z(tbw)} l (${z(zahl(m, "ww"))} %)</b></div>
+    ${wasserGrafik(m.ICW, m.ECW)}
+    <div class="zeile"><span>ECW/TBW*</span><b>${z(ecwQ, 3)} &nbsp;<span class="urteil" style="background:${ecwFarbe}">${ecwText}</span></b></div>
+    ${ecwSkala(ecwQ)}
+    <div class="zeile"><span>ICW-Anteil (Referenz ab 61 %)</span><b>${z(icwAnteil, 1, " %")}</b></div>
+    <div class="zeile"><span>Zellindex R6,25/R50 (Ganzkörper)</span><b>${z(seg(m, "M").Q, 3)}</b></div>
+    <p class="notiz">Referenz (InBody): bis 0,390 optimal, 0,390–0,400 verbesserungswürdig, darüber erhöht.
+    * ECW geschätzt aus 6,25 kHz (Guricci/Deurenberg 1999), für dieses Gerät nicht validiert.</p>
+  </div>
+
+  <div class="karte">
+    <h3>Weitere Werte</h3>
+    <div class="zeile"><span>Grundumsatz</span><b>${z(zahl(m, "rB"), 0)} kcal</b></div>
+    <div class="zeile"><span>Metabolisches Alter</span><b>${z(zahl(m, "rA"), 0)} Jahre</b></div>
+    <div class="zeile"><span>Bein-Muskel-Score</span><b>${z(zahl(m, "LP"), 0)}</b></div>
+    <div class="zeile"><span>Normalgewicht (BMI 22)</span><b>${z(zielgewicht)} kg</b></div>
+    <div class="zeile"><span>Differenz zum Normalgewicht</span><b>${wk && zielgewicht && wk >= zielgewicht ? "+" : "−"}${z(wk && zielgewicht ? Math.abs(wk - zielgewicht) : null)} kg</b></div>
+  </div>
+
+  <div class="karte">
+    <h3>Impedanzen <small style="font-weight:400;color:${C.grau}">Ω</small></h3>
+    <table class="imp"><tr><th>Strecke</th><th>R 6,25</th><th>X 6,25</th><th>R 50</th><th>X 50</th><th>PhA</th></tr>${impZeilen}</table>
+  </div>
+</div>
+</div>
+
+<div class="fuss">Keine medizinische Diagnose. Immer unter gleichen Bedingungen messen. Referenzen: Phasenwinkel Bosy-Westphal 2006 · Körperfett Gallagher 2000 · BMI WHO · ECW Guricci/Deurenberg 1999 · ECW/TBW InBody · Muskel, Viszeralfett Tanita</div>
+</body></html>`;
+  }
+
+  return { messung, html };
+})();
+// </blatt>
+
+
 // ---------- Oberfläche ----------
 const $ = id => document.getElementById(id);
 const speicher = {
@@ -427,11 +1017,54 @@ function zeigeVerlauf() {
   const zeilen = liste.slice().reverse().map(m => {
     const w = m.werte;
     return `<tr><td>${m.zeile.Zeitpunkt}</td><td>${w.Wk ?? ""}</td><td>${w.FW ?? ""}</td><td>${w.mW ?? ""}</td>` +
-           `<td>${m.segmente.find(s => s.kuerzel === "M")?.PhA50.toFixed(2) ?? ""}</td></tr>`;
+           `<td>${m.segmente.find(s => s.kuerzel === "M")?.PhA50.toFixed(2) ?? ""}</td>` +
+           `<td><button class="klein" data-blatt="${m.zeile.Zeitpunkt}">Blatt</button></td></tr>`;
   });
   $("verlauf").innerHTML = `<div class="tabelle"><table><tr><th>Zeitpunkt</th><th>Gewicht kg</th><th>Fett %</th>` +
-    `<th>Muskeln kg</th><th>PhA50 Ganzkörper</th></tr>${zeilen.join("")}</table></div>`;
+    `<th>Muskeln kg</th><th>PhA50 Ganzkörper</th><th></th></tr>${zeilen.join("")}</table></div>`;
 }
+$("verlauf").onclick = ev => {
+  const z = ev.target.dataset?.blatt;
+  const m = z && messungenVon($("name").value.trim()).find(x => x.zeile.Zeitpunkt === z);
+  if (m) zeigeBlatt(m);
+};
+
+// --- Gesundheitsblatt wie in der PC-App: Ansicht, Drucken (PDF), Teilen ---
+let blattDatei = null;
+function zeitAus(text) {  // "18.10.2026 14:29:05"
+  const [d, u] = text.split(" "), [tg, mo, j] = d.split(".").map(Number), [h, mi, s] = u.split(":").map(Number);
+  return new Date(j, mo - 1, tg, h, mi, s);
+}
+function zeigeBlatt(mess) {
+  const html = Blatt.html(Blatt.messung(mess.werte, zeitAus(mess.zeile.Zeitpunkt)), mess.name);
+  blattDatei = new File([html], `Gesundheitsblatt_${mess.name.replace(/\s+/g, "_")}_${mess.stempel}.html`, { type: "text/html" });
+  $("blattFrame").srcdoc = html;
+  $("blattAnsicht").classList.remove("versteckt");
+  passeBlattAn();
+}
+function passeBlattAn() {
+  const s = Math.min(1, ($("blattRahmen").clientWidth - 24) / 794), f = $("blattFrame");
+  f.style.transform = `scale(${s})`;
+  f.style.marginRight = `${-794 * (1 - s)}px`;
+  f.style.marginBottom = `${-1123 * (1 - s)}px`;
+}
+window.addEventListener("resize", () => { if (blattDatei) passeBlattAn(); });
+$("blattMessung").onclick = () => letzte && zeigeBlatt(letzte);
+$("blattSchliessen").onclick = () => { $("blattAnsicht").classList.add("versteckt"); blattDatei = null; };
+$("blattDrucken").onclick = () => {
+  try { const w = $("blattFrame").contentWindow; w.focus(); w.print(); }
+  catch (f) { log(`Drucken im Rahmen nicht möglich: ${f.message}`); window.print(); }
+};
+$("blattTeilen").onclick = async () => {
+  if (!blattDatei) return;
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [blattDatei] })) { await navigator.share({ files: [blattDatei] }); return; }
+  } catch (f) { if (f.name === "AbortError") return; log(`Teilen nicht möglich: ${f.message}`); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blattDatei); a.download = blattDatei.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+};
 
 // --- Ergebnis ---
 let letzte = null;
