@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tanita MC-580</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --karte: #ffffff; --text: #1d2730; --leise: #5d6b78; --linie: #d9e0e6;
+    --akzent: #1b9dbd; --akzent-text: #ffffff; --gut: #2e8b57; --warn: #c0392b; --hinweis: #fff6d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171c; --karte: #1b232b; --text: #e6edf2; --leise: #9aa8b5; --linie: #2c3843;
+      --akzent: #38b6d6; --akzent-text: #0c1216; --gut: #5cc48a; --warn: #ff7b6b; --hinweis: #3a3420;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 4px 0 12px; }
+  h2 { font-size: 1.1rem; margin: 0 0 10px; }
+  section { background: var(--karte); border: 1px solid var(--linie); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .raster { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  label { display: flex; flex-direction: column; font-size: .85rem; color: var(--leise); gap: 4px; }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--linie);
+                  border-radius: 8px; padding: 8px; min-height: 42px; width: 100%; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer;
+           background: var(--linie); color: var(--text); min-height: 44px; }
+  button.haupt { background: var(--akzent); color: var(--akzent-text); font-weight: 600; font-size: 1.05rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  .knoepfe { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #status { font-size: 1.05rem; font-weight: 600; }
+  #status.fehler { color: var(--warn); }
+  #status.gross { font-size: 1.5rem; color: var(--akzent); }
+  .hinweis { background: var(--hinweis); border-radius: 8px; padding: 10px; font-size: .9rem; }
+  .kacheln { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+  .kachel { border: 1px solid var(--linie); border-radius: 10px; padding: 8px 10px; }
+  .kachel b { display: block; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+  .kachel span { font-size: .8rem; color: var(--leise); }
+  .tabelle { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: .9rem; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--linie); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--leise); font-weight: 600; }
+  details summary { cursor: pointer; color: var(--leise); }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: .75rem; max-height: 300px; overflow: auto; }
+  textarea { width: 100%; min-height: 120px; font: .75rem monospace; color: var(--text); background: var(--bg);
+             border: 1px solid var(--linie); border-radius: 8px; }
+  .versteckt { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tanita MC-580 · Messung über Bluetooth</h1>
+
+  <section id="keinBluetooth" class="hinweis versteckt">
+    Dieser Browser kann kein Web Bluetooth. Auf dem iPad die Seite im Browser <b>Bluefy</b> öffnen
+    (Safari kann es nicht), am PC in Edge oder Chrome. Die Seite muss über <b>https://</b> oder
+    <b>http://localhost</b> geladen sein.
+  </section>
+
+  <section>
+    <h2>Person</h2>
+    <div class="raster">
+      <label>Gespeicherte Person
+        <select id="profil"><option value="">– neu –</option></select>
+      </label>
+      <label>Name <input id="name" autocomplete="off"></label>
+      <label>Größe (cm) <input id="groesse" type="number" step="0.5" min="90" max="220" inputmode="decimal"></label>
+      <label>Geburtsdatum <input id="geburt" type="date"></label>
+      <label>Geschlecht
+        <select id="geschlecht"><option value="1">männlich</option><option value="2">weiblich</option></select>
+      </label>
+      <label>Körpertyp
+        <select id="koerpertyp"><option value="0">Standard</option><option value="2">Athlet</option></select>
+      </label>
+      <label>Kleidung (kg) <input id="kleidung" type="number" step="0.1" min="0" max="9.9" value="0.0" inputmode="decimal"></label>
+    </div>
+    <div class="knoepfe">
+      <button id="profilSpeichern">Person merken</button>
+      <button id="profilLoeschen">Person vergessen</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Messung</h2>
+    <p class="hinweis">An der Waage <b>Control Mode „BLE“</b>. Die Tanita-App muss geschlossen sein.
+      Nach dem Start erscheint die Geräteauswahl: <b>TNT_BW</b> bzw. <b>MC-580EU</b> wählen.
+      Erst wenn hier „Jetzt barfuß auf die Waage stellen“ steht, auf die Waage steigen.</p>
+    <div id="status">Bereit.</div>
+    <div class="knoepfe">
+      <button id="messen" class="haupt">▶ Messung starten</button>
+      <button id="abbrechen" disabled>Abbrechen</button>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input id="alleGeraete" type="checkbox" style="width:auto;min-height:0"> alle Geräte zur Auswahl zeigen</label>
+    </div>
+  </section>
+
+  <section id="ergebnis" class="versteckt">
+    <h2 id="ergebnisTitel">Ergebnis</h2>
+    <div id="kacheln" class="kacheln"></div>
+    <h2 style="margin-top:16px">Segmente: Phasenwinkel und R6,25/R50</h2>
+    <div class="tabelle"><table id="segmente"></table></div>
+    <h2 style="margin-top:16px">Körperteile</h2>
+    <div class="tabelle"><table id="koerperteile"></table></div>
+    <div class="knoepfe">
+      <button id="csvMessung" class="haupt">CSV dieser Messung</button>
+      <button id="csvKopieren">CSV kopieren</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Gespeicherte Messungen (nur auf diesem Gerät)</h2>
+    <div id="verlauf">Noch keine.</div>
+    <div class="knoepfe">
+      <button id="csvAlle">CSV aller Messungen der Person</button>
+      <button id="verlaufLoeschen">Messungen der Person löschen</button>
+    </div>
+    <textarea id="csvText" class="versteckt" readonly></textarea>
+  </section>
+
+  <section>
+    <details>
+      <summary>Protokoll (Bluetooth-Schritte)</summary>
+      <pre id="protokoll"></pre>
+    </details>
+  </section>
+</main>
+
+<script>
+// <protokoll> — Bluetooth-Protokoll der MC-580, wie tanita_ble.py (README Abschnitt 0b)
+const Tanita = (() => {
+  const DIENST = "273e5100-6b90-4779-83b8-b8bf1dadac35";
+  const SCHREIB = "273e5108-6b90-4779-83b8-b8bf1dadac35";
+  const EMPFANG = "273e510f-6b90-4779-83b8-b8bf1dadac35";  // nur nach Kopplung
+
+  // Tag → [Kürzel im RS-232-Datensatz, Teiler, Nachkommastellen, Art]
+  // Art: "u" ohne Vorzeichen, "s" mit Vorzeichen, "b" Bewertung (Bit 7 = negativ)
+  const TAGS = new Map([
+    [0x6021, ["Wk", 100, 1, "u"]], [0x6056, ["MI", 10, 1, "u"]], [0x6022, ["FW", 10, 1, "u"]],
+    [0x6050, ["fW", 100, 1, "u"]], [0x602D, ["MW", 100, 1, "u"]], [0x6023, ["mW", 100, 1, "u"]],
+    [0x6024, ["sW", 1, 0, "b"]], [0x6029, ["bW", 100, 1, "u"]], [0x602A, ["wW", 100, 1, "u"]],
+    [0x602B, ["ww", 10, 1, "u"]], [0x6025, ["IF", 10, 0, "u"]], [0x6027, ["rB", 1, 0, "u"]],
+    [0x602F, ["rJ", 1, 0, "u"]], [0x6028, ["rA", 1, 0, "u"]], [0x602E, ["LP", 1, 0, "u"]],
+    [0x6057, ["Sw", 100, 1, "u"]], [0x6058, ["OV", 100, 1, "u"]], [0x6822, ["Sf", 100, 1, "u"]],
+    [0x6823, ["SM", 100, 1, "u"]], [0x615D, ["BA", 1, 0, "u"]], [0x615E, ["BF", 1, 0, "u"]],
+    [0x6821, ["Pr", 100, 1, "u"]], [0x6826, ["mh", 10, 1, "u"]], [0x6827, ["mb", 10, 1, "u"]],
+    [0x6828, ["ah", 10, 1, "u"]], [0x6829, ["ab", 10, 1, "u"]],
+  ]);
+  for (const [basis, seg] of [[0x6030, "R"], [0x6036, "L"], [0x603C, "r"], [0x6042, "l"], [0x6048, "T"]])
+    [["F", 10, 1, "u"], ["f", 100, 1, "u"], ["M", 100, 1, "u"], ["m", 100, 1, "u"], ["S", 1, 0, "b"], ["s", 1, 0, "b"]]
+      .forEach(([k, t, st, art], i) => TAGS.set(basis + i, [k + seg, t, st, art]));
+  // Impedanzen in 0,1 Ω: R/X bei 50 kHz, U/V bei 6,25 kHz
+  for (const [strecke, r50, x50, r6, x6] of [["M", 0x6721, 0x6723, 0x672A, 0x6731], ["H", 0x6123, 0x6124, 0x6729, 0x6730],
+      ["R", 0x612B, 0x612C, 0x6728, 0x672F], ["L", 0x6133, 0x6134, 0x6727, 0x672E], ["r", 0x613B, 0x613C, 0x6726, 0x672D],
+      ["l", 0x6143, 0x6144, 0x6725, 0x672C], ["F", 0x614B, 0x614C, 0x6152, 0x6151]])
+    for (const [tag, k] of [[r50, "R"], [x50, "X"], [r6, "U"], [x6, "V"]]) TAGS.set(tag, [k + strecke, 10, 1, "s"]);
+
+  // Länge der Werte in Byte (sonst 2)
+  const LAENGE = new Map([[0x6A33, 3], [0x6A38, 1], [0x6A3B, 1], [0x6A37, 1], [0x6A13, 1], [0x6A15, 4], [0x6024, 1],
+                          [0x6028, 1], [0x615D, 1], [0x615E, 1]]);
+  for (let t = 0x6070; t < 0x607E; t++) LAENGE.set(t, 1);
+  for (const [t, v] of TAGS) if (v[3] === "b") LAENGE.set(t, 1);
+
+  const REIHENFOLGE = ("MO ID St Da TI Bt GE AG Hm Pt Wk FW fW MW mW sW bW wW ww MI Sw OV Sf SM IF LP rB rb rJ rA BA BF Pr " +
+    "FR fR MR mR SR sR FL fL ML mL SL sL Fr fr Mr mr Sr sr Fl fl Ml ml Sl sl FT fT MT mT ST sT").split(" ");
+  for (const s of "MHRLrlF") for (const k of "UVRX") REIHENFOLGE.push(k + s);
+  REIHENFOLGE.push("mh", "mb", "ah", "ab");
+
+  const STRECKEN = [["M", "Ganzkörper rechts"], ["H", "Ganzkörper links"], ["r", "Arm rechts"], ["l", "Arm links"],
+                    ["R", "Bein rechts"], ["L", "Bein links"], ["F", "Fuß – Fuß"]];
+
+  const be = (n, laenge) => { const b = []; for (let i = laenge - 1; i >= 0; i--) b.push(Math.floor(n / 256 ** i) % 256); return b; };
+  const zahlAus = (bytes, mitVorzeichen) => {
+    let n = 0; for (const b of bytes) n = n * 256 + b;
+    if (mitVorzeichen && bytes.length && bytes[0] & 0x80) n -= 256 ** bytes.length;
+    return n;
+  };
+  const hex = b => Array.from(b, x => x.toString(16).padStart(2, "0")).join(" ");
+
+  /** [Länge-2, 2 Byte BE][Befehl, 2 Byte][Daten][~Bytesumme] */
+  function nachricht(befehl, daten = []) {
+    const m = [...be(daten.length + 3, 2), ...be(befehl, 2), ...daten];
+    return Uint8Array.from([...m, ~m.reduce((a, b) => a + b, 0) & 0xFF]);
+  }
+
+  /** [Offset, 2 Byte BE][Index des letzten Rahmens][Länge][bis 16 Byte] */
+  function rahmen(m) {
+    const teile = [];
+    for (let i = 0; i < m.length; i += 16) teile.push(m.slice(i, i + 16));
+    return teile.map((t, i) => Uint8Array.from([...be(i * 16, 2), teile.length - 1, t.length, ...t]));
+  }
+
+  const TAG_MS = 86400000;
+  const tageSeit = (jahr, monat, tag, d) => Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(jahr, monat - 1, tag)) / TAG_MS);
+
+  /** 6a32 = Tage seit 01.01.2000, 6a33 = halbe Sekunden seit Mitternacht (Ortszeit) */
+  function uhr(t) {
+    const halb = Math.floor(((t.getHours() * 60 + t.getMinutes()) * 60 + t.getSeconds() + t.getMilliseconds() / 1000) * 2);
+    return [0x6a, 0x32, ...be(tageSeit(2000, 1, 1, t), 2), 0x6a, 0x33, ...be(halb, 3)];
+  }
+
+  function ascii(text, laenge) {
+    const b = Array.from(text, z => z.charCodeAt(0) < 128 ? z.charCodeAt(0) : 0x3F).slice(0, laenge);
+    while (b.length < laenge) b.push(0);
+    return b;
+  }
+
+  /** Daten für 10 02 (Platz 1), aufgebaut wie bei der Tanita-App.
+   *  p = {name, groesse, geburtsdatum: Date, geschlecht 1/2, koerpertyp, kleidung} */
+  function personendaten(p, jetzt) {
+    return [0x00, ...uhr(jetzt),
+      0x6a, 0x3d, ...ascii(p.name, 5),
+      0x7e, 0x22, 0x0a, ...ascii(p.name, 10),
+      0x6a, 0x3c, ...be(tageSeit(1899, 12, 31, p.geburtsdatum), 2),
+      0x6a, 0x37, p.geschlecht === 1 ? 0 : 1,
+      0x6a, 0x38, p.koerpertyp === 0 ? 0 : 1,
+      0x6a, 0x3e, ...be(Math.round(p.groesse * 10), 2),
+      0x6a, 0x3b, 0x01,
+      0x60, 0x4f, ...be(Math.round(p.kleidung * 100), 2),
+      0x6a, 0x13, 0x00,
+      0x6a, 0x15, 0x00, 0x00, 0x00, 0x01];
+  }
+
+  /** Zerlegt Tag-Wert-Folgen. Bei unbekannten Tags wird die Länge so gewählt, dass der Rest aufgeht. */
+  function zerlegeTlv(d) {
+    function weiter(pos, bekannt) {
+      if (pos === d.length) return [];
+      if (pos + 2 > d.length || d[pos] < 0x60 || d[pos] > 0x7E) return null;
+      const tag = d[pos] * 256 + d[pos + 1];
+      const kandidaten = bekannt.has(tag) ? [bekannt.get(tag)]
+        : LAENGE.has(tag) ? [LAENGE.get(tag)] : TAGS.has(tag) ? [2] : [2, 1, 3, 4];
+      for (const n of kandidaten) {
+        const rest = weiter(pos + 2 + n, new Map(bekannt).set(tag, n));
+        if (rest !== null) return [[tag, d.slice(pos + 2, pos + 2 + n)], ...rest];
+      }
+      return null;
+    }
+    const ergebnis = weiter(0, new Map());
+    if (ergebnis === null) throw new Error("Messdaten lassen sich nicht zerlegen");
+    return ergebnis;
+  }
+
+  /** Wie Pythons f"{zahl / teiler:.{stellen}f}". toFixed rundet wie Python, nur bei exakt
+   *  darstellbarem ,5 (z. B. 70,25) rundet Python zur geraden Ziffer. */
+  function format(zahl, teiler, stellen) {
+    const v = zahl / teiler;
+    const genau = v.toFixed(stellen + 40);  // exakte Dezimaldarstellung der Gleitkommazahl
+    const rest = genau.slice(genau.length - 40);
+    if (rest === "5".padEnd(40, "0")) {  // genau in der Mitte: zur geraden Ziffer
+      const abgeschnitten = genau.slice(0, genau.length - 40).replace(/\.$/, "");
+      const letzte = Number(abgeschnitten[abgeschnitten.length - 1]);
+      if (letzte % 2 === 0) return abgeschnitten;
+    }
+    return v.toFixed(stellen);
+  }
+
+  /** Werte wie tanita_protokoll.zerlege(als_zeile(...)): Kürzel → Text, in RS-232-Reihenfolge */
+  function werteAus(messdaten, p) {
+    const w = { MO: "MC-580", ID: "0000000000000000", St: "0", GE: String(p.geschlecht), AG: String(p.alter),
+                Pt: format(Math.round(p.kleidung * 10), 10, 1) };
+    let tage = null, halb = null;
+    for (const [tag, wert] of zerlegeTlv(messdaten)) {
+      if (tag === 0x6A32) tage = zahlAus(wert);
+      else if (tag === 0x6A33) halb = zahlAus(wert);
+      else if (tag === 0x6A38) w.Bt = String(wert[0]);
+      else if (tag === 0x6A3E) w.Hm = format(zahlAus(wert), 10, 1);
+      else if (TAGS.has(tag)) {
+        const [k, teiler, stellen, art] = TAGS.get(tag);
+        const zahl = art === "b" ? (wert[0] & 0x80 ? -(wert[0] & 0x7F) : wert[0]) : zahlAus(wert, art === "s");
+        w[k] = format(zahl, teiler, stellen);
+      }
+    }
+    if (tage !== null && halb !== null) {
+      const t = new Date(Date.UTC(2000, 0, 1) + tage * TAG_MS + Math.floor(halb / 2) * 1000);
+      const z = n => String(n).padStart(2, "0");
+      w.Da = `${z(t.getUTCDate())}/${z(t.getUTCMonth() + 1)}/${t.getUTCFullYear()}`;
+      w.TI = `${z(t.getUTCHours())}:${z(t.getUTCMinutes())}`;
+    }
+    if ("rB" in w) w.rb = String(Math.round(Number(w.rB) * 4.184));
+    // Datensatz wie über RS-232 (als_zeile), mit Prüfsumme CS
+    const text = ["{0,16,~0,1,~1,1,~2,1", ...REIHENFOLGE.filter(k => k in w)
+      .map(k => `${k},${["MO", "ID", "Da", "TI"].includes(k) ? `"${w[k]}"` : w[k]}`)].join(",") + ",";
+    const cs = Array.from(text, z => z.charCodeAt(0)).reduce((a, b) => a + b, 0) & 0xFF;
+    // Werte wie tanita_protokoll.zerlege: leere Frequenz-Plätze (a…, c…, J… mit 0.0) fallen weg
+    const werte = {};
+    for (const k of REIHENFOLGE)
+      if (k in w && !("acJKLQij".includes(k[0]) && w[k] === "0.0")) werte[k] = w[k];
+    werte.CS = cs.toString(16).toUpperCase().padStart(2, "0");
+    return { werte, datensatz: `${text}CS,${werte.CS}` };
+  }
+
+  /** Wie tanita_protokoll.kennzahlen: je Strecke R6/R50 und Phasenwinkel */
+  function kennzahlen(w) {
+    const zeilen = [];
+    for (const [k, name] of STRECKEN) {
+      const [r6, x6, r50, x50] = ["U", "V", "R", "X"].map(c => (c + k) in w ? Number(w[c + k]) : NaN);
+      if ([r6, x6, r50, x50].some(Number.isNaN) || r6 === 0 || r50 === 0) continue;
+      const grad = x => x * 180 / Math.PI;
+      zeilen.push({ kuerzel: k, strecke: name, R6: r6, X6: x6, R50: r50, X50: x50, R6_R50: r6 / r50,
+                    PhA6: grad(Math.atan(-x6 / r6)), PhA50: grad(Math.atan(-x50 / r50)) });
+    }
+    return zeilen;
+  }
+
+  /** Eine CSV-Zeile wie speichere_csv im Empfänger (Semikolon, Dezimalkomma) */
+  function csvZeile(zeitpunkt, w, segmente) {
+    const z = n => String(n).padStart(2, "0");
+    const zeile = { Zeitpunkt: `${z(zeitpunkt.getDate())}.${z(zeitpunkt.getMonth() + 1)}.${zeitpunkt.getFullYear()} ` +
+                               `${z(zeitpunkt.getHours())}:${z(zeitpunkt.getMinutes())}:${z(zeitpunkt.getSeconds())}` };
+    for (const s of segmente) {
+      zeile[`R6/R50 ${s.strecke}`] = s.R6_R50.toFixed(4).replace(".", ",");
+      zeile[`PhA50 ${s.strecke}`] = s.PhA50.toFixed(2).replace(".", ",");
+      zeile[`PhA6 ${s.strecke}`] = s.PhA6.toFixed(2).replace(".", ",");
+    }
+    for (const [k, v] of Object.entries(w)) zeile[k] = /^-?\d+(\.\d+)?$/.test(v) ? v.replace(".", ",") : v;
+    return zeile;
+  }
+
+  function csvText(zeilen) {
+    const kopf = [];
+    for (const z of zeilen) for (const k of Object.keys(z)) if (!kopf.includes(k)) kopf.push(k);
+    const feld = v => /[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    return "﻿" + [kopf.join(";"), ...zeilen.map(z => kopf.map(k => feld(z[k] ?? "")).join(";"))].join("\r\n") + "\r\n";
+  }
+
+  /** Setzt die Rahmen der Waage wieder zu Nachrichten zusammen */
+  class Empfang {
+    constructor() { this.puffer = []; this.fertig = []; this.wartende = []; }
+    rahmen(b) {
+      const offset = b[0] * 256 + b[1], letzter = b[2], laenge = b[3];
+      if (offset === 0) this.puffer = [];
+      this.puffer.push(...b.slice(4, 4 + laenge));
+      if (Math.floor(offset / 16) === letzter) {
+        const m = Uint8Array.from(this.puffer);
+        const w = this.wartende.shift();
+        w ? w.ok(m) : this.fertig.push(m);
+      }
+    }
+    naechste(sekunden) {
+      if (this.fertig.length) return Promise.resolve(this.fertig.shift());
+      return new Promise((ok, fehler) => {
+        const eintrag = { ok: m => { clearTimeout(uhr); ok(m); }, fehler };
+        const uhr = setTimeout(() => { this.wartende = this.wartende.filter(e => e !== eintrag);
+                                       fehler(new Error(`Keine Antwort der Waage innerhalb von ${sekunden} s`)); }, sekunden * 1000);
+        eintrag.fehler = f => { clearTimeout(uhr); fehler(f); };
+        this.wartende.push(eintrag);
+      });
+    }
+    abbrechen(f) { for (const w of this.wartende.splice(0)) w.fehler(f); }
+  }
+
+  return { DIENST, SCHREIB, EMPFANG, nachricht, rahmen, uhr, personendaten, zerlegeTlv, werteAus, kennzahlen,
+           csvZeile, csvText, Empfang, hex, format, REIHENFOLGE };
+})();
+// </protokoll>
+
+// ---------- Oberfläche ----------
+const $ = id => document.getElementById(id);
+const speicher = {
+  lies(k, ersatz) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : ersatz; } catch { return ersatz; } },
+  schreib(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* privates Fenster */ } },
+};
+
+function log(text) {
+  const z = new Date().toLocaleTimeString("de-DE");
+  $("protokoll").textContent += `${z}  ${text}\n`;
+}
+function status(text, art = "") { $("status").textContent = text; $("status").className = art; }
+
+// --- Personen ---
+function profile() { return speicher.lies("tanita.profile", []); }
+function zeigeProfile(wahl = "") {
+  const s = $("profil");
+  s.innerHTML = '<option value="">– neu –</option>';
+  for (const p of profile()) s.add(new Option(p.name, p.name, false, p.name === wahl));
+}
+function personAusFormular() {
+  const name = $("name").value.trim();
+  const groesse = Number($("groesse").value.replace(",", "."));
+  const geburt = $("geburt").value;
+  const kleidung = Number(String($("kleidung").value || "0").replace(",", "."));
+  if (!name) throw new Error("Bitte einen Namen eingeben.");
+  if (!(groesse >= 90 && groesse <= 220)) throw new Error("Bitte die Größe in cm eingeben (90–220).");
+  if (!/^\d{4}-\d\d-\d\d$/.test(geburt)) throw new Error("Bitte das Geburtsdatum eingeben.");
+  if (!(kleidung >= 0 && kleidung < 10)) throw new Error("Kleidungsgewicht zwischen 0 und 9,9 kg.");
+  const [j, m, t] = geburt.split("-").map(Number);
+  const heute = new Date();
+  const alter = heute.getFullYear() - j - ((heute.getMonth() + 1 < m || (heute.getMonth() + 1 === m && heute.getDate() < t)) ? 1 : 0);
+  return { name, groesse, geburt, geburtsdatum: new Date(j, m - 1, t), alter,
+           geschlecht: Number($("geschlecht").value), koerpertyp: Number($("koerpertyp").value), kleidung };
+}
+function ladeProfil(name) {
+  const p = profile().find(x => x.name === name);
+  if (!p) return;
+  $("name").value = p.name; $("groesse").value = p.groesse; $("geburt").value = p.geburt;
+  $("geschlecht").value = p.geschlecht; $("koerpertyp").value = p.koerpertyp; $("kleidung").value = p.kleidung;
+  speicher.schreib("tanita.letzte", p.name);
+  zeigeVerlauf();
+}
+$("profil").onchange = e => { if (e.target.value) ladeProfil(e.target.value); else { $("name").value = ""; zeigeVerlauf(); } };
+$("profilSpeichern").onclick = () => {
+  try {
+    const p = personAusFormular();
+    const eintrag = { name: p.name, groesse: p.groesse, geburt: p.geburt, geschlecht: p.geschlecht,
+                      koerpertyp: p.koerpertyp, kleidung: p.kleidung };
+    speicher.schreib("tanita.profile", [...profile().filter(x => x.name !== p.name), eintrag]);
+    speicher.schreib("tanita.letzte", p.name);
+    zeigeProfile(p.name);
+    status(`${p.name} gemerkt (nur auf diesem Gerät).`);
+  } catch (f) { status(f.message, "fehler"); }
+};
+$("profilLoeschen").onclick = () => {
+  const name = $("profil").value;
+  if (!name || !confirm(`${name} vergessen? Gespeicherte Messungen bleiben.`)) return;
+  speicher.schreib("tanita.profile", profile().filter(x => x.name !== name));
+  zeigeProfile();
+};
+
+// --- Messungen auf diesem Gerät ---
+function messungen() { return speicher.lies("tanita.messungen", []); }
+function messungenVon(name) { return messungen().filter(m => m.name === name); }
+function zeigeVerlauf() {
+  const liste = messungenVon($("name").value.trim());
+  if (!liste.length) { $("verlauf").textContent = "Noch keine."; return; }
+  const zeilen = liste.slice().reverse().map(m => {
+    const w = m.werte;
+    return `<tr><td>${m.zeile.Zeitpunkt}</td><td>${w.Wk ?? ""}</td><td>${w.FW ?? ""}</td><td>${w.mW ?? ""}</td>` +
+           `<td>${m.segmente.find(s => s.kuerzel === "M")?.PhA50.toFixed(2) ?? ""}</td></tr>`;
+  });
+  $("verlauf").innerHTML = `<div class="tabelle"><table><tr><th>Zeitpunkt</th><th>Gewicht kg</th><th>Fett %</th>` +
+    `<th>Muskeln kg</th><th>PhA50 Ganzkörper</th></tr>${zeilen.join("")}</table></div>`;
+}
+
+// --- Ergebnis ---
+let letzte = null;
+function zeigeErgebnis(m) {
+  letzte = m;
+  const w = m.werte;
+  $("ergebnis").classList.remove("versteckt");
+  $("ergebnisTitel").textContent = `Ergebnis ${m.name}, ${m.zeile.Zeitpunkt}`;
+  const kacheln = [["Wk", "Gewicht", "kg"], ["MI", "BMI", ""], ["FW", "Körperfett", "%"], ["fW", "Fettmasse", "kg"],
+    ["mW", "Muskelmasse", "kg"], ["MW", "fettfreie Masse", "kg"], ["ww", "Körperwasser", "%"], ["bW", "Knochenmasse", "kg"],
+    ["IF", "Viszeralfett", "Stufe"], ["rB", "Grundumsatz", "kcal"], ["rA", "metabol. Alter", "Jahre"], ["Pr", "Protein", "kg"]];
+  const phM = m.segmente.find(s => s.kuerzel === "M");
+  $("kacheln").innerHTML = kacheln.filter(([k]) => k in w)
+    .map(([k, text, einheit]) => `<div class="kachel"><b>${w[k].replace(".", ",")}</b><span>${text} ${einheit}</span></div>`).join("") +
+    (phM ? `<div class="kachel"><b>${phM.PhA50.toFixed(2).replace(".", ",")}°</b><span>Phasenwinkel 50 kHz (Ganzkörper)</span></div>` : "");
+  const de = (x, n) => x.toFixed(n).replace(".", ",");
+  $("segmente").innerHTML = "<tr><th>Strecke</th><th>R 6,25 kHz Ω</th><th>R 50 kHz Ω</th><th>R6,25/R50</th>" +
+    "<th>PhA 6,25 °</th><th>PhA 50 °</th></tr>" +
+    m.segmente.map(s => `<tr><td>${s.strecke}</td><td>${de(s.R6, 1)}</td><td>${de(s.R50, 1)}</td><td>${de(s.R6_R50, 4)}</td>` +
+                        `<td>${de(s.PhA6, 2)}</td><td>${de(s.PhA50, 2)}</td></tr>`).join("");
+  const teile = [["r", "Arm rechts"], ["l", "Arm links"], ["T", "Rumpf"], ["R", "Bein rechts"], ["L", "Bein links"]];
+  $("koerperteile").innerHTML = "<tr><th>Körperteil</th><th>Fett %</th><th>Fett kg</th><th>Muskeln kg</th><th>fettfrei kg</th></tr>" +
+    teile.filter(([k]) => ("F" + k) in w).map(([k, text]) =>
+      `<tr><td>${text}</td><td>${w["F" + k]}</td><td>${w["f" + k]}</td><td>${w["m" + k]}</td><td>${w["M" + k]}</td></tr>`
+        .replace(/(\d)\.(\d)/g, "$1,$2")).join("");
+}
+
+// --- CSV ausgeben: Teilen (iPad), sonst Download, dazu Text zum Kopieren ---
+async function gibCsv(zeilen, dateiname) {
+  const text = Tanita.csvText(zeilen);
+  $("csvText").value = text; $("csvText").classList.remove("versteckt");
+  const datei = new File([text], dateiname, { type: "text/csv" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [datei] })) { await navigator.share({ files: [datei] }); return; }
+  } catch (f) { if (f.name === "AbortError") return; log(`Teilen nicht möglich: ${f.message}`); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(datei); a.download = dateiname;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+const dateiName = (name, zusatz) => `messungen_${name.replace(/\s+/g, "_")}${zusatz}.csv`;
+$("csvMessung").onclick = () => letzte && gibCsv([letzte.zeile], dateiName(letzte.name, "_" + letzte.stempel));
+$("csvKopieren").onclick = async () => {
+  if (!letzte) return;
+  const text = Tanita.csvText([letzte.zeile]);
+  $("csvText").value = text; $("csvText").classList.remove("versteckt");
+  try { await navigator.clipboard.writeText(text); status("CSV kopiert."); }
+  catch { $("csvText").select(); status("Bitte den markierten Text kopieren."); }
+};
+$("csvAlle").onclick = () => {
+  const name = $("name").value.trim();
+  const liste = messungenVon(name);
+  if (liste.length) gibCsv(liste.map(m => m.zeile), dateiName(name, ""));
+  else status("Für diese Person sind hier keine Messungen gespeichert.");
+};
+$("verlaufLoeschen").onclick = () => {
+  const name = $("name").value.trim();
+  if (!messungenVon(name).length || !confirm(`Alle hier gespeicherten Messungen von ${name} löschen?`)) return;
+  speicher.schreib("tanita.messungen", messungen().filter(m => m.name !== name));
+  zeigeVerlauf();
+};
+
+// --- Bluetooth ---
+let geraet = null, laeuft = false;
+const pause = ms => new Promise(ok => setTimeout(ok, ms));
+
+async function messen() {
+  let p;
+  try { p = personAusFormular(); } catch (f) { status(f.message, "fehler"); return; }
+  laeuft = true; $("messen").disabled = true; $("abbrechen").disabled = false;
+  const empfang = new Tanita.Empfang();
+  try {
+    status("Waage auswählen …");
+    const optionen = $("alleGeraete").checked
+      ? { acceptAllDevices: true, optionalServices: [Tanita.DIENST] }
+      : { filters: [{ namePrefix: "TNT_" }, { namePrefix: "MC-580" }, { services: [Tanita.DIENST] }], optionalServices: [Tanita.DIENST] };
+    geraet = await navigator.bluetooth.requestDevice(optionen);
+    log(`Gerät: ${geraet.name ?? "(ohne Namen)"} ${geraet.id}`);
+    geraet.addEventListener("gattserverdisconnected", () => {
+      log("Verbindung getrennt");
+      empfang.abbrechen(new Error("Die Waage hat die Verbindung getrennt"));
+    }, { once: true });
+
+    let schreib;
+    for (let versuch = 1; ; versuch++) {
+      try {
+        status(`Verbinde (Versuch ${versuch}) …`);
+        const server = await geraet.gatt.connect();
+        const dienst = await server.getPrimaryService(Tanita.DIENST);
+        schreib = await dienst.getCharacteristic(Tanita.SCHREIB);
+        const antwort = await dienst.getCharacteristic(Tanita.EMPFANG);
+        antwort.addEventListener("characteristicvaluechanged", e =>
+          empfang.rahmen(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength)));
+        status("Benachrichtigungen einschalten (beim ersten Mal fragt das iPad nach der Kopplung) …");
+        await antwort.startNotifications();  // braucht Kopplung (Insufficient Authentication)
+        log(`Verbunden (Versuch ${versuch}), Benachrichtigungen an`);
+        break;
+      } catch (f) {
+        log(`Verbinden fehlgeschlagen (Versuch ${versuch}): ${f.name} ${f.message}`);
+        if (geraet.gatt.connected) geraet.gatt.disconnect();
+        if (versuch === 3 || !laeuft) throw f;
+        await pause(1500);
+      }
+    }
+
+    async function sende(befehl, daten) {
+      const m = Tanita.nachricht(befehl, daten);
+      log(`-> ${befehl.toString(16).padStart(4, "0")} (${daten.length} Byte)`);
+      for (const r of Tanita.rahmen(m)) {
+        if (schreib.writeValueWithoutResponse) await schreib.writeValueWithoutResponse(r);
+        else await schreib.writeValue(r);
+        await pause(20);
+      }
+    }
+    async function frage(befehl, daten, sekunden = 10) {
+      await sende(befehl, daten);
+      const a = await empfang.naechste(sekunden);
+      pruefe(a, befehl);
+      return a.slice(5, -1);
+    }
+    function pruefe(a, befehl) {
+      const summe = ~Array.from(a.slice(0, -1)).reduce((x, y) => x + y, 0) & 0xFF;
+      if (summe !== a[a.length - 1]) throw new Error(`Prüfsumme falsch bei Antwort auf ${befehl.toString(16)}`);
+      const kommando = a[2] * 256 + a[3], st = a[4];
+      log(`<- ${kommando.toString(16).padStart(4, "0")} Status ${st.toString(16).padStart(2, "0")} (${a.length} Byte)`);
+      if (kommando !== (befehl | 0x8000) || st !== 0)
+        throw new Error(`Waage lehnt ${befehl.toString(16).padStart(4, "0")} ab (Antwort ${kommando.toString(16)}, Status ${st})`);
+    }
+
+    status("Sende Uhrzeit und Personendaten …");
+    const jetzt = new Date();
+    await frage(0x0010, Tanita.uhr(jetzt));
+    await frage(0x0020, [0x00]);
+    await frage(0x1002, Tanita.personendaten(p, jetzt));
+    await sende(0x2010, [0x00]);
+    status("Jetzt barfuß auf die Waage stellen und die Griffe nehmen.", "gross");
+    const fertig = await empfang.naechste(180);
+    log(`<- ${Tanita.hex(fertig.slice(0, 6))}`);
+    if (fertig[2] !== 0xa0 || fertig[3] !== 0x10 || fertig[4] !== 0x00)
+      throw new Error(`Messung abgebrochen (Antwort ${Tanita.hex(fertig.slice(2, 5))})`);
+    status("Messung fertig, hole die Daten …");
+    const daten = await frage(0x3010, [0x00]);
+    const { werte, datensatz } = Tanita.werteAus(daten.slice(1), p);
+    const segmente = Tanita.kennzahlen(werte);
+    const zeitpunkt = new Date();
+    const z = n => String(n).padStart(2, "0");
+    const m = { name: p.name, werte, segmente, datensatz, zeile: Tanita.csvZeile(zeitpunkt, werte, segmente),
+                stempel: `${zeitpunkt.getFullYear()}-${z(zeitpunkt.getMonth() + 1)}-${z(zeitpunkt.getDate())}_${z(zeitpunkt.getHours())}${z(zeitpunkt.getMinutes())}` };
+    log(`Messdaten zerlegt: ${Object.keys(werte).length} Felder`);
+    speicher.schreib("tanita.messungen", [...messungen(), m]);
+    zeigeErgebnis(m);
+    zeigeVerlauf();
+    status(`Fertig: ${werte.Wk?.replace(".", ",")} kg. Du kannst absteigen.`);
+  } catch (f) {
+    log(`Fehler: ${f.name} ${f.message}`);
+    if (f.name === "NotFoundError" && /cancel/i.test(f.message)) status("Keine Waage ausgewählt.", "fehler");
+    else if (/auth|encrypt|security|pair/i.test(f.message))
+      status("Die Waage verlangt eine Kopplung. Waage in den Kopplungsmodus (Taste über 5 s, „Pairing“, SET) und erneut starten.", "fehler");
+    else status(`Fehler: ${f.message}`, "fehler");
+  } finally {
+    laeuft = false; $("messen").disabled = false; $("abbrechen").disabled = true;
+    if (geraet?.gatt.connected) geraet.gatt.disconnect();
+  }
+}
+
+$("messen").onclick = messen;
+$("abbrechen").onclick = () => { laeuft = false; if (geraet?.gatt.connected) geraet.gatt.disconnect(); status("Abgebrochen."); };
+
+if (!navigator.bluetooth) { $("keinBluetooth").classList.remove("versteckt"); $("messen").disabled = true; }
+zeigeProfile(speicher.lies("tanita.letzte", ""));
+ladeProfil(speicher.lies("tanita.letzte", ""));
+zeigeVerlauf();
+</script>
+</body>
+</html>
